@@ -1,0 +1,21 @@
+ImportMumaxOVF[dataFile_String] := 
+  Module[{ff, header, headArr, valuedim, xnodes, ynodes, znodes, dataType, data}, 
+    ff = OpenRead[dataFile, BinaryFormat -> True];
+    header = ReadByteArray[ff, StringToByteArray["# Begin: Data "]];
+    headArr = ImportString[header // ByteArrayToString, "Table"][[All, 2 ;;]];
+    valuedim = FirstCase[headArr, {"valuedim:", x_} -> ToExpression[x]];
+    xnodes = FirstCase[headArr, {"xnodes:", x_} -> ToExpression[x]];
+    ynodes = FirstCase[headArr, {"ynodes:", x_} -> ToExpression[x]];
+    znodes = FirstCase[headArr, {"znodes:", x_} -> ToExpression[x]];
+    dataType = StringCases[ByteArrayToString[ReadByteArray[ff, EndOfLine]], WordCharacter ..];
+    If[dataType[[1]] == "Binary", ReadByteArray[ff, dataType[[2]] // ToExpression]];
+    data = ReadByteArray[ff, StringToByteArray["# End: Data"]];
+    Close[ff];
+    Switch[dataType[[1]],
+      "Text", 
+        ArrayReshape[ImportByteArray[data, "Table"], {znodes, ynodes, xnodes, valuedim}],
+      "Binary", 
+        ArrayReshape[ImportByteArray[data, "Real" <> ToString[8*ToExpression[dataType[[2]]]]], {znodes, ynodes, xnodes, valuedim}],
+      True, 0
+    ]
+  ]
