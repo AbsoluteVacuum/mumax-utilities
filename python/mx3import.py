@@ -20,15 +20,22 @@ def i2s(index):
 def unpack(path):
     path = pathize(path)
 
-    with path.open('rb') as f:
-        headers = _read_header(f)
+    try:
+        with path.open('rb') as f:
+            headers = _read_header(f)
 
-        if headers['data_type'][3] == 'Text':
-            return _text_decode(f, headers)
+            if headers['data_type'][3] == 'Text':
+                return _text_decode(f, headers)
+            elif headers['data_type'][3] == 'Binary':
+                chunk_size = int(headers['data_type'][4])
+                return _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size))
+            else:
+                print(f"Warning: Unknown data type '{data_type_info[3]}' for {path}")
+                return None
 
-        elif headers['data_type'][3] == 'Binary':
-            chunk_size = int(headers['data_type'][4])
-            return _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size))
+    except Exception as e:
+        print(f"An error occurred while unpacking {path}:\n{e}")
+        return None
 
 def unpack_multiple(path_pattern, start, end):
     first = unpack(path_pattern + i2s(start) + ".ovf")
