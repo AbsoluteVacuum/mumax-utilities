@@ -13,6 +13,7 @@
 import numpy as np
 import struct
 import pathlib
+from concurrent.futures import ProcessPoolExecutor
 
 def i2s(index):
     return f"{index:06}"
@@ -37,13 +38,20 @@ def unpack(path):
         print(f"An error occurred while unpacking {path}:\n{e}")
         return None
 
-def unpack_multiple(path_pattern, start, end):
-    first = unpack(path_pattern + i2s(start) + ".ovf")
-    result = np.zeros_like( first, shape=(end-start, *(first.shape)) )
-    result[0] = first
-    for ind in range(1, end-start):
-        result[ind] = unpack(path_pattern + i2s(ind+start) + ".ovf")
-    return result
+def unpack_multiple(path_pattern, start, end, max_workers=None):
+    paths = [(path_pattern + i2s(i) + ".ovf") for i in range(start, end)]
+    
+    results_list = []
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        results_iterator = executor.map(unpack, paths)
+        results_list = list(results_iterator)
+    
+    invalid_indices = [i for i, val in enumerate(results_list) if not isinstance(val, np.ndarray)]
+    if invalid_indices:
+        print(f"Could not import files with pattern '{path_pattern}' and indices {invalid_indices}")
+        return None
+    else:
+        return np.stack(results_list, axis=0)
     
 def fft_multiple(tens):
     return np.fft.rfft(tens, axis=0)[1:]
