@@ -14,6 +14,7 @@ import numpy as np
 import struct
 import pathlib
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 def i2s(index):
     return f"{index:06}"
@@ -38,11 +39,19 @@ def unpack(path):
         print(f"An error occurred while unpacking {path}:\n{e}")
         return None
 
-def unpack_multiple(path_pattern, start, end, max_workers=None):
+def unpack_multiple(path_pattern, start, end, parallelization='threads', max_workers=None):
+    
+    if parallelization=='threads':
+        Executor = ProcessPoolExecutor
+    elif parallelization=='processes':
+        Executor = ThreadPoolExecutor
+    else:
+        print(f"Could not import files using parallelization='{parallelization}'. The only allowed approaches are 'threads' and 'processes'")
+    
     paths = [(path_pattern + i2s(i) + ".ovf") for i in range(start, end)]
     
     results_list = []
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    with Executor(max_workers=max_workers) as executor:
         results_iterator = executor.map(unpack, paths)
         results_list = list(results_iterator)
     
