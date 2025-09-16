@@ -77,13 +77,15 @@ def pathize(path):
     else:
         raise TypeError(f'Invalid path type: {type(path)}')
 
-def _read_header(fobj):
+def _read_header(fobj, max_header_bytes=2048):
     """Read headers from OVF file object. fobj must be opened in 'rb' mode (read as bytes).
 
     Parameters
     ----------
     fobj : file
         OVF file to read, must be opened in bytes mode (mode='rb')
+    max_header_bytes : int
+        max number of bytes allowed to read while reading the header (default: 2048)
 
     Returns
     -------
@@ -92,12 +94,26 @@ def _read_header(fobj):
     """
 
     headers = {'SimTime': -1, 'Iteration': -1, 'Stage': -1, 'MIFSource': ''}
+    header_bytes = bytearray()
+    continue_reading = True
+    # Read until we find the header terminator or exceed a sane limit
+    while continue_reading:
+        line = fobj.readline()
+        if not line:
+            raise IOError(f"EOF reached before any data was found")
+        
+        header_bytes.extend(line)
+        if b'Begin: Data' in line:
+            continue_reading = False
+        if len(header_bytes) > max_header_bytes:
+            raise IOError(f"'Begin: Data' not found in the first {max_header_bytes} bytes")
+    
+    header_text = header_bytes.decode('latin-1')
 
-    line = ''
-    while 'Begin: Data' not in line:
-
-        line = fobj.readline().strip().decode()
-
+    for line_unstripped in header_text.splitlines():
+        
+        line = line_unstripped.strip()
+        
         for key in ["xbase",
                     "ybase",
                     "zbase",
