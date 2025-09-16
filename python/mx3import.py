@@ -75,6 +75,9 @@ def unpack_multiple(path_pattern, start, end, parallelization='threads', max_wor
 def fft_multiple(tens):
     return np.fft.rfft(tens, axis=0)[1:]
 
+def fft_multiple_(tens):
+    return np.fft.rfft(tens, axis=0)
+
 def pathize(path):
     """Takes a string or pathlib.Path object and return the corresponding pathlib.Path object.
 
