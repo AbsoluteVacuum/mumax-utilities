@@ -19,21 +19,31 @@ from concurrent.futures import ThreadPoolExecutor
 def i2s(index):
     return f"{index:06}"
 
+def unpack_fobj(f):
+    """Takes a file-like object and tries to import as an OVF."""
+    try:
+        headers = _read_header(f)
+
+        if headers['data_type'][3] == 'Text':
+            return _text_decode(f, headers)
+        elif headers['data_type'][3] == 'Binary':
+            chunk_size = int(headers['data_type'][4])
+            return _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size))
+        else:
+            print(f"Warning: Unknown data type '{data_type_info[3]}' for {f}")
+            return None
+    
+    except Exception as e:
+        print(f"An error occurred while unpacking {f}:\n{e}")
+        return None
+
 def unpack(path):
+    """Takes a string or pathlib.Path object and tries to import as an OVF."""
     path = pathize(path)
 
     try:
         with path.open('rb') as f:
-            headers = _read_header(f)
-
-            if headers['data_type'][3] == 'Text':
-                return _text_decode(f, headers)
-            elif headers['data_type'][3] == 'Binary':
-                chunk_size = int(headers['data_type'][4])
-                return _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size))
-            else:
-                print(f"Warning: Unknown data type '{data_type_info[3]}' for {path}")
-                return None
+            return unpack_fobj(f)
 
     except Exception as e:
         print(f"An error occurred while unpacking {path}:\n{e}")
