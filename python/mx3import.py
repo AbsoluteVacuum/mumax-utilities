@@ -71,7 +71,49 @@ def unpack_multiple(path_pattern, start, end, parallelization='threads', max_wor
         return None
     else:
         return np.stack(results_list, axis=0)
-    
+
+
+import xarray as xr
+def unpack_into_xarray(path):
+   """Takes a string or pathlib.Path object and tries to import as an OVF."""
+    path = pathize(path)
+    with path.open('rb') as f:
+        headers = _read_header(f)
+        f.seek(0)
+        data = unpack_fobj(f)
+
+    nx = int(headers.get("xnodes", data.shape[2]))
+    ny = int(headers.get("ynodes", data.shape[1]))
+    nz = int(headers.get("znodes", data.shape[0]))
+    valuedim = int(headers.get("valuedim", data.shape[3] if data.ndim == 4 else 1))
+
+    dx = headers.get("xstepsize", 1.0)
+    dy = headers.get("ystepsize", 1.0)
+    dz = headers.get("zstepsize", 1.0)
+
+    # centered coordinates
+    x = (np.arange(nx) - (nx - 1) / 2) * dx
+    y = (np.arange(ny) - (ny - 1) / 2) * dy
+    z = (np.arange(nz) - (nz - 1) / 2) * dz
+
+    # Component labels (vector fields)
+    if valuedim == 1:
+        comps = ["scalar"]
+    elif valuedim == 3:
+        comps = headers.get("valuelabels", "comp_1 comp_2 comp_3").split()
+        if len(comps) != valuedim:
+            comps = [f"comp_{i}" for i in range(valuedim)]
+
+    coords = {
+        "z": z,
+        "y": y,
+        "x": x,
+        "comp": comps
+    }
+
+    # attrs = {k: v for k, v in headers.items() if isinstance(v, (int, float, str))}
+    return xr.DataArray(data, coords=coords) #, attrs=attrs)
+
 def fft_multiple(tens):
     return np.fft.rfft(tens, axis=0)[1:]
 
