@@ -72,6 +72,24 @@ def unpack_multiple(path_pattern, start, end, parallelization='threads', max_wor
     else:
         return np.stack(results_list, axis=0)
 
+def unpack_preallocate(path_pattern, start, end, slicer_tuple=None):
+    if slicer_tuple is None:
+        slicer_tuple=slice(None)
+    try:
+        paths = [(path_pattern + i2s(i) + ".ovf") for i in range(start, end)]
+    
+        first = unpack(paths[0])[slicer_tuple]    
+        result_arr = np.empty_like(first, shape=[end-start, *(first.shape)] ) 
+         
+        for idxx, pathh in enumerate(paths):
+            result_arr[idxx] = unpack(pathh)[slicer_tuple]  
+    
+        return result_arr
+    except Exception as inst:
+        print(type(inst))   
+        print(inst.args)     
+        print(inst)       
+        return None
 
 import xarray as xr
 def unpack_into_xarray(path):
