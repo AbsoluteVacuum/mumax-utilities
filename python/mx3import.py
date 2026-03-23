@@ -52,11 +52,12 @@ def unpack(path):
 def unpack_multiple(path_pattern, start, end, parallelization='threads', max_workers=None):
     
     if parallelization=='threads':
-        Executor = ProcessPoolExecutor
-    elif parallelization=='processes':
         Executor = ThreadPoolExecutor
+    elif parallelization=='processes':
+        Executor = ProcessPoolExecutor
     else:
         print(f"Could not import files using parallelization='{parallelization}'. The only allowed approaches are 'threads' and 'processes'")
+        return None
     
     paths = [(path_pattern + i2s(i) + ".ovf") for i in range(start, end)]
     
