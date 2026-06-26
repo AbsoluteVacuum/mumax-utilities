@@ -92,6 +92,33 @@ def unpack_preallocate(path_pattern, start, end, slicer_tuple=None):
         print(inst)       
         return None
 
+def unpack_preallocate_threaded(path_pattern, start, end, slicer_tuple=None, max_workers=None):
+    if slicer_tuple is None:
+        slicer_tuple = slice(None)
+    try:
+        paths = [(path_pattern + i2s(i) + ".ovf") for i in range(start, end)]
+    
+        first = unpack(paths[0])[slicer_tuple]    
+        result_arr = np.empty_like(first, shape=[end-start, *(first.shape)]) 
+        
+        def load_file(indexed_path):
+            idxx, pathh = indexed_path
+            try:
+                result_arr[idxx] = unpack(pathh)[slicer_tuple]
+            except Exception as e:
+                print(f"Error processing index {idxx} ({pathh}): {e}")
+                raise e
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            executor.map(load_file, enumerate(paths))
+    
+        return result_arr
+    except Exception as inst:
+        print(type(inst))   
+        print(inst.args)     
+        print(inst)       
+        return None
+
 import xarray as xr
 def unpack_into_xarray(path):
    """Takes a string or pathlib.Path object and tries to import as an OVF."""
