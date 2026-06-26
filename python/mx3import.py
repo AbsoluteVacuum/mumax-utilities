@@ -19,6 +19,10 @@ from concurrent.futures import ThreadPoolExecutor
 def i2s(index):
     return f"{index:06}"
 
+class OVFUnpackError(Exception):
+    """Custom exception for specific OVF parsing failures."""
+    pass
+
 def unpack_fobj(f):
     """Takes a file-like object and tries to import as an OVF."""
     try:
@@ -30,12 +34,10 @@ def unpack_fobj(f):
             chunk_size = int(headers['data_type'][4])
             return _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size))
         else:
-            print(f"Warning: Unknown data type '{data_type_info[3]}' for {f}")
-            return None
+            raise OVFUnpackError(f"Unknown data type '{data_type_info[3]}'")
     
     except Exception as e:
-        print(f"An error occurred while unpacking {f}:\n{e}")
-        return None
+        raise OVFUnpackError(f"Failed to decode file stream.") from e
 
 def unpack(path):
     """Takes a string or pathlib.Path object and tries to import as an OVF."""
@@ -47,7 +49,7 @@ def unpack(path):
 
     except Exception as e:
         print(f"An error occurred while unpacking {path}:\n{e}")
-        return None
+        raise e
 
 def unpack_multiple(path_pattern, start, end, parallelization='threads', max_workers=None):
     
