@@ -51,50 +51,7 @@ def unpack(path):
         print(f"An error occurred while unpacking {path}:\n{e}")
         raise e
 
-def unpack_multiple(path_pattern, start, end, parallelization='threads', max_workers=None):
-    
-    if parallelization=='threads':
-        Executor = ThreadPoolExecutor
-    elif parallelization=='processes':
-        Executor = ProcessPoolExecutor
-    else:
-        print(f"Could not import files using parallelization='{parallelization}'. The only allowed approaches are 'threads' and 'processes'")
-        return None
-    
-    paths = [(path_pattern + i2s(i) + ".ovf") for i in range(start, end)]
-    
-    results_list = []
-    with Executor(max_workers=max_workers) as executor:
-        results_iterator = executor.map(unpack, paths)
-        results_list = list(results_iterator)
-    
-    invalid_indices = [i for i, val in enumerate(results_list) if not isinstance(val, np.ndarray)]
-    if invalid_indices:
-        print(f"Could not import files with pattern '{path_pattern}' and indices {invalid_indices}")
-        return None
-    else:
-        return np.stack(results_list, axis=0)
-
-def unpack_preallocate(path_pattern, start, end, slicer_tuple=None):
-    if slicer_tuple is None:
-        slicer_tuple=slice(None)
-    try:
-        paths = [(path_pattern + i2s(i) + ".ovf") for i in range(start, end)]
-    
-        first = unpack(paths[0])[slicer_tuple]    
-        result_arr = np.empty_like(first, shape=[end-start, *(first.shape)] ) 
-         
-        for idxx, pathh in enumerate(paths):
-            result_arr[idxx] = unpack(pathh)[slicer_tuple]  
-    
-        return result_arr
-    except Exception as inst:
-        print(type(inst))   
-        print(inst.args)     
-        print(inst)       
-        return None
-
-def unpack_preallocate_threaded(path_pattern, start, end, slicer_tuple=None, max_workers=None):
+def unpack_multiple(path_pattern, start, end, slicer_tuple=None, max_workers=None):
     if slicer_tuple is None:
         slicer_tuple = slice(None)
     try:
@@ -119,11 +76,11 @@ def unpack_preallocate_threaded(path_pattern, start, end, slicer_tuple=None, max
         print(type(inst))   
         print(inst.args)     
         print(inst)       
-        return None
+        raise inst
 
 import xarray as xr
 def unpack_into_xarray(path):
-   """Takes a string or pathlib.Path object and tries to import as an OVF."""
+    """Takes a string or pathlib.Path object and tries to import as an OVF."""
     path = pathize(path)
     with path.open('rb') as f:
         headers = _read_header(f)
