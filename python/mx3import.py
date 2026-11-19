@@ -13,7 +13,6 @@
 import numpy as np
 import struct
 import pathlib
-from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor
 
 def i2s(index):
@@ -23,55 +22,65 @@ class OVFUnpackError(Exception):
     """Custom exception for specific OVF parsing failures."""
     pass
 
-def unpack_fobj(f):
-    """Takes a file-like object and tries to import as an OVF."""
+def unpack_fobj(f, with_header=False):
+    """Takes a file-like object and tries to import as an OVF.
+    With with_header=True returns (data, headers)."""
     try:
         headers = _read_header(f)
 
         if headers['data_type'][3] == 'Text':
-            return _text_decode(f, headers)
+            data = _text_decode(f, headers)
         elif headers['data_type'][3] == 'Binary':
             chunk_size = int(headers['data_type'][4])
-            return _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size))
+            data = _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size))
         else:
-            raise OVFUnpackError(f"Unknown data type '{data_type_info[3]}'")
+            raise OVFUnpackError(f"Unknown data type '{headers['data_type'][3]}'")
     
     except Exception as e:
         raise OVFUnpackError(f"Failed to decode file stream.") from e
 
-def unpack(path):
-    """Takes a string or pathlib.Path object and tries to import as an OVF."""
+    return (data, headers) if with_header else data
+
+def unpack(path, with_header=False):
+    """Takes a string or pathlib.Path object and tries to import as an OVF.
+    With with_header=True returns (data, headers)."""
     path = pathize(path)
 
     try:
         with path.open('rb') as f:
-            return unpack_fobj(f)
+            return unpack_fobj(f, with_header)
 
     except Exception as e:
         print(f"An error occurred while unpacking {path}:\n{e}")
         raise e
 
-def unpack_multiple(path_pattern, start, end, slicer_tuple=None, max_workers=None):
+def unpack_multiple(path_pattern, start, end, slicer_tuple=None, max_workers=None, with_headers=False):
+    """With with_headers=True returns (data, list of headers)."""
     if slicer_tuple is None:
         slicer_tuple = slice(None)
     try:
         paths = [(path_pattern + i2s(i) + ".ovf") for i in range(start, end)]
     
-        first = unpack(paths[0])[slicer_tuple]    
+        first, first_headers = unpack(paths[0], with_header=True)
+        first = first[slicer_tuple]
         result_arr = np.empty_like(first, shape=[end-start, *(first.shape)]) 
+        result_arr[0] = first
+        headers = [first_headers] + [None] * (end-start-1)
         
         def load_file(indexed_path):
             idxx, pathh = indexed_path
             try:
-                result_arr[idxx] = unpack(pathh)[slicer_tuple]
+                data, headers[idxx] = unpack(pathh, with_header=True)
+                result_arr[idxx] = data[slicer_tuple]
             except Exception as e:
                 print(f"Error processing index {idxx} ({pathh}): {e}")
                 raise e
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            executor.map(load_file, enumerate(paths))
+            # list() collects the results, so an exception in a worker is re-raised here
+            list(executor.map(load_file, list(enumerate(paths))[1:]))
     
-        return result_arr
+        return (result_arr, headers) if with_headers else result_arr
     except Exception as inst:
         print(type(inst))   
         print(inst.args)     
@@ -79,13 +88,14 @@ def unpack_multiple(path_pattern, start, end, slicer_tuple=None, max_workers=Non
         raise inst
 
 import xarray as xr
-def unpack_into_xarray(path):
-    """Takes a string or pathlib.Path object and tries to import as an OVF."""
+def unpack_into_xarray(path, absolute_coords=False):
+    """Takes a string or pathlib.Path object and tries to import as an OVF.
+    With absolute_coords=True, the coordinates are the cell centres as in the file
+    (base + i*stepsize), otherwise they are centered on 0."""
+    
     path = pathize(path)
     with path.open('rb') as f:
-        headers = _read_header(f)
-        f.seek(0)
-        data = unpack_fobj(f)
+        data, headers = unpack_fobj(f, with_header=True)
 
     nx = int(headers.get("xnodes", data.shape[2]))
     ny = int(headers.get("ynodes", data.shape[1]))
@@ -96,28 +106,47 @@ def unpack_into_xarray(path):
     dy = headers.get("ystepsize", 1.0)
     dz = headers.get("zstepsize", 1.0)
 
-    # centered coordinates
-    x = (np.arange(nx) - (nx - 1) / 2) * dx
-    y = (np.arange(ny) - (ny - 1) / 2) * dy
-    z = (np.arange(nz) - (nz - 1) / 2) * dz
+    if absolute_coords:
+        # cell centres: base + i*step
+        x = headers.get("xbase", dx / 2) + np.arange(nx) * dx
+        y = headers.get("ybase", dy / 2) + np.arange(ny) * dy
+        z = headers.get("zbase", dz / 2) + np.arange(nz) * dz
+    else:
+        # centered coordinates
+        x = (np.arange(nx) - (nx - 1) / 2) * dx
+        y = (np.arange(ny) - (ny - 1) / 2) * dy
+        z = (np.arange(nz) - (nz - 1) / 2) * dz
 
     # Component labels (vector fields)
     if valuedim == 1:
         comps = ["scalar"]
-    elif valuedim == 3:
+    else:
         comps = headers.get("valuelabels", "comp_1 comp_2 comp_3").split()
         if len(comps) != valuedim:
             comps = [f"comp_{i}" for i in range(valuedim)]
 
+    meshunit = {"units": headers.get("meshunit", "")}
     coords = {
-        "z": z,
-        "y": y,
-        "x": x,
+        "z": ("z", z, meshunit),
+        "y": ("y", y, meshunit),
+        "x": ("x", x, meshunit),
         "comp": comps
     }
 
-    # attrs = {k: v for k, v in headers.items() if isinstance(v, (int, float, str))}
-    return xr.DataArray(data, coords=coords) #, attrs=attrs)
+    attrs = {k: v for k, v in headers.items() if isinstance(v, (int, float, str))}
+    return xr.DataArray(data, dims=("z", "y", "x", "comp"), coords=coords, name=headers.get("title"), attrs=attrs)
+
+def unpack_multiple_into_xarray(path_pattern, start, end, max_workers=None, absolute_coords=False):
+    """Like unpack_multiple, but returns an xarray.DataArray with dims (t, z, y, x, comp),
+    t being the 'Total simulation time' of each file."""
+    import xarray as xr
+    data, headers = unpack_multiple(path_pattern, start, end, max_workers=max_workers, with_headers=True)
+    # reads the first file once more, only to reuse the coordinates and attrs of unpack_into_xarray
+    template = unpack_into_xarray(path_pattern + i2s(start) + ".ovf", absolute_coords=absolute_coords)
+    attrs = {k: v for k, v in template.attrs.items() if k != 'SimTime'}
+    t = np.array([h['SimTime'] for h in headers])
+    return xr.DataArray(data, dims=("t", *template.dims), coords={"t": ("t", t, {"units": "s"}), **template.coords},
+                        name=template.name, attrs=attrs)
 
 def fft_multiple(tens):
     return np.fft.rfft(tens, axis=0)[1:]
@@ -146,7 +175,7 @@ def pathize(path):
     else:
         raise TypeError(f'Invalid path type: {type(path)}')
 
-def _read_header(fobj, max_header_bytes=2048):
+def _read_header(fobj, max_header_bytes=65536):
     """Read headers from OVF file object. fobj must be opened in 'rb' mode (read as bytes).
 
     Parameters
@@ -154,7 +183,7 @@ def _read_header(fobj, max_header_bytes=2048):
     fobj : file
         OVF file to read, must be opened in bytes mode (mode='rb')
     max_header_bytes : int
-        max number of bytes allowed to read while reading the header (default: 2048)
+        max number of bytes allowed to read while reading the header (default: 65536)
 
     Returns
     -------
@@ -162,7 +191,8 @@ def _read_header(fobj, max_header_bytes=2048):
         Dictionary containing the [important] header keys and values
     """
 
-    headers = {'SimTime': -1, 'Iteration': -1, 'Stage': -1, 'MIFSource': ''}
+    # OVF 1.0 has no valuedim line: it is always a 3-vector field
+    headers = {'SimTime': -1, 'Iteration': -1, 'Stage': -1, 'MIFSource': '', 'valuedim': 3}
     header_bytes = bytearray()
     continue_reading = True
     # Read until we find the header terminator or exceed a sane limit
@@ -182,6 +212,7 @@ def _read_header(fobj, max_header_bytes=2048):
     for line_unstripped in header_text.splitlines():
         
         line = line_unstripped.strip()
+        name = line.lstrip('#').split(':')[0].strip()
         
         for key in ["xbase",
                     "ybase",
@@ -194,8 +225,15 @@ def _read_header(fobj, max_header_bytes=2048):
                     "znodes",
                     "valuemultiplier",
                     "valuedim"]:
-            if key in line:
+            if key == name:
                 headers[key] = float(line.split(': ')[1])
+
+        for key in ["title",
+                    "meshunit",
+                    "valuelabels",
+                    "valueunits"]:
+            if key == name.lower():
+                headers[key] = line.split(':', 1)[1].strip()
 
         if 'Total simulation time' in line:
             headers['SimTime'] = float(line.split(':')[-1].strip().split()[0].strip())
@@ -227,7 +265,7 @@ def _endianness(f, nbytes):
     elif struct.unpack(little_endian[nbytes], buffer)[0] == value[nbytes]:  # Little endian?
         return little_endian[nbytes]
     else:
-        raise IOError(f'Cannot decode {nbytes}-byte order mark: ' + hex(buffer))
+        raise IOError(f'Cannot decode {nbytes}-byte order mark: ' + buffer.hex())
 
 def _text_decode(f, headers):
     
@@ -237,13 +275,21 @@ def _text_decode(f, headers):
 
     return data*headers.get('valuemultiplier', 1)
 
-def _fast_binary_decode(f, chunk_size, headers, dtype):
+def _fast_binary_decode(f, chunk_size, headers, dtype, use_valuemultiplier=False):
 
     arrshape=[int(headers[key]) for key in ['znodes','ynodes','xnodes','valuedim']]
+    buffer = bytearray(int(np.prod(arrshape))*chunk_size)
+    if f.readinto(buffer) != len(buffer):
+        raise IOError(f"File is truncated: data block is shorter than the header says")
     ret = np.ndarray(shape=arrshape,
                      dtype=dtype,
-                     buffer=f.read(np.prod(arrshape)*chunk_size),
+                     buffer=buffer,
                      offset=0
                      )
+    # native byte order ('<f' -> float32)
+    ret = ret.astype(ret.dtype.newbyteorder('='), copy=False)
+
+    if use_valuemultiplier and ('valuemultiplier' in headers):
+        ret *= headers['valuemultiplier']
 
     return ret
