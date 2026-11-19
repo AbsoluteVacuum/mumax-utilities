@@ -22,17 +22,17 @@ class OVFUnpackError(Exception):
     """Custom exception for specific OVF parsing failures."""
     pass
 
-def unpack_fobj(f, with_header=False):
+def unpack_fobj(f, with_header=False, use_valuemultiplier=False):
     """Takes a file-like object and tries to import as an OVF.
     With with_header=True returns (data, headers)."""
     try:
         headers = _read_header(f)
 
         if headers['data_type'][3] == 'Text':
-            data = _text_decode(f, headers)
+            data = _text_decode(f, headers, use_valuemultiplier)
         elif headers['data_type'][3] == 'Binary':
             chunk_size = int(headers['data_type'][4])
-            data = _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size))
+            data = _fast_binary_decode(f, chunk_size, headers, _endianness(f, chunk_size), use_valuemultiplier)
         else:
             raise OVFUnpackError(f"Unknown data type '{headers['data_type'][3]}'")
     
@@ -41,14 +41,14 @@ def unpack_fobj(f, with_header=False):
 
     return (data, headers) if with_header else data
 
-def unpack(path, with_header=False):
+def unpack(path, with_header=False, use_valuemultiplier=False):
     """Takes a string or pathlib.Path object and tries to import as an OVF.
     With with_header=True returns (data, headers)."""
     path = pathize(path)
 
     try:
         with path.open('rb') as f:
-            return unpack_fobj(f, with_header)
+            return unpack_fobj(f, with_header, use_valuemultiplier)
 
     except Exception as e:
         print(f"An error occurred while unpacking {path}:\n{e}")
@@ -88,14 +88,14 @@ def unpack_multiple(path_pattern, start, end, slicer_tuple=None, max_workers=Non
         raise inst
 
 import xarray as xr
-def unpack_into_xarray(path, absolute_coords=False):
+def unpack_into_xarray(path, absolute_coords=False, use_valuemultiplier=False):
     """Takes a string or pathlib.Path object and tries to import as an OVF.
     With absolute_coords=True, the coordinates are the cell centres as in the file
     (base + i*stepsize), otherwise they are centered on 0."""
     
     path = pathize(path)
     with path.open('rb') as f:
-        data, headers = unpack_fobj(f, with_header=True)
+        data, headers = unpack_fobj(f, with_header=True, use_valuemultiplier=use_valuemultiplier)
 
     nx = int(headers.get("xnodes", data.shape[2]))
     ny = int(headers.get("ynodes", data.shape[1]))
@@ -267,13 +267,16 @@ def _endianness(f, nbytes):
     else:
         raise IOError(f'Cannot decode {nbytes}-byte order mark: ' + buffer.hex())
 
-def _text_decode(f, headers):
+def _text_decode(f, headers, use_valuemultiplier=False):
     
     arrshape=[int(headers[key]) for key in ['znodes','ynodes','xnodes','valuedim']]
     
     data = np.loadtxt(f, max_rows=np.prod(arrshape[:3])).reshape(arrshape)
 
-    return data*headers.get('valuemultiplier', 1)
+    if use_valuemultiplier:
+        data *= headers.get('valuemultiplier', 1)
+
+    return data
 
 def _fast_binary_decode(f, chunk_size, headers, dtype, use_valuemultiplier=False):
 
