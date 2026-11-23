@@ -77,8 +77,7 @@ def unpack_multiple(path_pattern, start, end, slicer_tuple=None, max_workers=Non
                 raise e
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # list() collects the results, so an exception in a worker is re-raised here
-            list(executor.map(load_file, list(enumerate(paths))[1:]))
+            list(executor.map(load_file, list(enumerate(paths))[1:])) # list() re-raises worker errors
     
         return (result_arr, headers) if with_headers else result_arr
     except Exception as inst:
@@ -86,6 +85,54 @@ def unpack_multiple(path_pattern, start, end, slicer_tuple=None, max_workers=Non
         print(inst.args)     
         print(inst)       
         raise inst
+
+import mmap
+import tarfile
+def unpack_tar(tar_path, total_timepoints, slicer_tuple=None, max_workers=None, prefix=''):
+    """Reads prefix+000000.ovf ... from an uncompressed tar into one array [t, z, y, x, c]
+    (or whatever slicer_tuple leaves of [z, y, x, c]).
+ 
+    The tar is memory-mapped and each binary member becomes an array view on it,
+    so only the bytes picked by slicer_tuple are actually read from disk.
+    """
+    if slicer_tuple is None:
+        slicer_tuple = slice(None)
+    with tarfile.open(tar_path, 'r:') as tf:       # 'r:' = uncompressed only (mmap needs that)
+        members = {m.name.split('/')[-1]: m for m in tf}   # one pass over the tar headers
+    names = [prefix + i2s(i) + '.ovf' for i in range(total_timepoints)]
+    missing = [n for n in names if n not in members]
+    if missing:
+        raise FileNotFoundError(f"{len(missing)} files missing in {tar_path}, e.g. {missing[:3]}")
+ 
+    with open(tar_path, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+ 
+        def view(name):
+            """Lazy array view of one member, plus its valuemultiplier."""
+            m = members[name]
+            hf = io.BytesIO(mm[m.offset_data:m.offset_data + min(m.size, 65536)])  # header only
+            headers = _read_header(hf)
+            if headers['data_type'][3] != 'Binary':                 # Text: just parse it
+                return unpack_fobj(io.BytesIO(mm[m.offset_data:m.offset_data + m.size])), 1
+            chunk_size = int(headers['data_type'][4])
+            dtype = _endianness(hf, chunk_size)
+            shape = [int(headers[k]) for k in ['znodes', 'ynodes', 'xnodes', 'valuedim']]
+            if hf.tell() + int(np.prod(shape)) * chunk_size > m.size:
+                raise IOError(f"{name} in {tar_path} is truncated")
+            arr = np.ndarray(shape, dtype, buffer=mm, offset=m.offset_data + hf.tell())
+            return arr, headers.get('valuemultiplier', 1)
+ 
+        first = view(names[0])[0][slicer_tuple]
+        result = np.empty([total_timepoints, *first.shape], first.dtype.newbyteorder('='))
+ 
+        def load(i):
+            arr, mult = view(names[i])
+            result[i] = arr[slicer_tuple]          # disk pages are read here, sliced part only
+            if mult != 1:
+                result[i] *= mult
+ 
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(load, range(total_timepoints)))   # list() re-raises worker errors
+    return result
 
 import xarray as xr
 def unpack_into_xarray(path, absolute_coords=False, use_valuemultiplier=False):
