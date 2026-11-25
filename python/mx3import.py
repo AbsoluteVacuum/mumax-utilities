@@ -88,6 +88,7 @@ def unpack_multiple(path_pattern, start, end, slicer_tuple=None, max_workers=Non
 
 import mmap
 import tarfile
+import io
 def unpack_tar(tar_path, total_timepoints, slicer_tuple=None, max_workers=None, prefix=''):
     """Reads prefix+000000.ovf ... from an uncompressed tar into one array [t, z, y, x, c]
     (or whatever slicer_tuple leaves of [z, y, x, c]).
